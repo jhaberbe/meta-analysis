@@ -3,6 +3,13 @@ import pandas as pd
 from scipy import stats 
 from scipy.stats import gaussian_kde, norm
 
+def agg_nonnegative(series):
+    return ",".join(
+        series[series >= 0]
+        .sort_values(ascending=False)
+        .astype(str)
+    )
+
 class MetaAnalysis:
 
     def generate_meta_estimate(self, df, balanced_matrix):
@@ -23,9 +30,10 @@ class MetaAnalysis:
         # w = a / se^2
         weights = precision[:, None] * importance_weights
 
-        # naive estimate
+        # naive estimate of mean and std error, as a gaussian mixture.
         normalized_estimate = (weights * lfc[:, None]).sum() / weights.sum()
-        normalized_standard_error = np.sqrt((importance_weights / weights).sum(axis=0))
+        var = 1 / weights.sum(axis=0)
+        normalized_standard_error = np.sqrt(var)
 
         tau2_samples, mean_samples = self.sample_tau2_likelihood(
             normalized_estimate, 
@@ -47,8 +55,22 @@ class MetaAnalysis:
             (1 - B) * full_dataset_mean
         )
 
-        shrunken_variance = (1 - B) * normalized_standard_error.pow(2)
+        # compute the posterior covariance.
+        shrunken_variance = (1/((1/tau2) + 1/normalized_standard_error.pow(2)))
         shrunken_standard_error = np.sqrt(shrunken_variance)
+
+        # stable_computation
+        z_naive = np.abs(normalized_estimate / normalized_standard_error)
+        z_eb = np.abs(shrunken_estimate / shrunken_standard_error)
+
+        log_p_naive = np.log(2) + norm.logsf(z_naive)
+        log_p_eb = np.log(2) + norm.logsf(z_eb)
+
+        p_naive = np.exp(log_p_naive)
+        p_eb = np.exp(log_p_eb)
+
+        log10p_naive = -log_p_naive / np.log(10)
+        log10p_eb = -log_p_eb / np.log(10)
 
         table = pd.DataFrame({
             # Per Gene Statistics
@@ -64,16 +86,16 @@ class MetaAnalysis:
             "shrunken_se": shrunken_standard_error,
 
             # Z-scores
-            "z_naive": normalized_estimate / normalized_standard_error,
-            "z_eb": shrunken_estimate / shrunken_standard_error,
+            "z_naive": z_naive,
+            "z_eb": z_eb,
 
             # pvalues
-            "p_naive": norm.sf(np.abs(normalized_estimate / normalized_standard_error)) * 2,
-            "p_eb": norm.sf(np.abs(shrunken_estimate / shrunken_standard_error)) * 2,
+            "p_naive": p_naive,
+            "p_eb": p_eb,
 
             # log10 for plotting
-            "log10p_naive": -np.log10(norm.sf(np.abs(normalized_estimate / normalized_standard_error)) * 2),
-            "log10p_eb": -np.log10(norm.sf(np.abs(shrunken_estimate / shrunken_standard_error)) * 2),
+            "log10p_naive": log10p_naive,
+            "log10p_eb": log10p_eb,
 
             # Full Dataset Statistics
             "B": B,
