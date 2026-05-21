@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import matplotlib.pyplot as plt
 
 class ForestPlotter:
@@ -13,6 +14,7 @@ class ForestPlotter:
         self,
         term: str,
         cutoff=0.99,
+        minimum_kept=5,
         figsize=None,
         ci_multiplier=1.96,
         point_size=45,
@@ -50,11 +52,11 @@ class ForestPlotter:
                 .loc[lambda df: df["cum_contribution"].le(cutoff), "gene"]
             )
 
-            if len(keep_genes) == 0:
+            if len(keep_genes) <= minimum_kept:
                 keep_genes = (
                     forest_df
                     .sort_values("pct_contribution", ascending=False)
-                    .head(1)["gene"]
+                    .head(minimum_kept)["gene"]
                 )
 
             forest_df = forest_df.loc[forest_df["gene"].isin(keep_genes)]
@@ -206,3 +208,119 @@ class ForestPlotter:
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
 
         return forest_df, fig, ax
+
+def volcano_plot(
+    table,
+    lfc_col="shrunken_estimate",
+    pval_col="log10p_eb",
+    gene_col=None,
+    size_col="n_eff",
+    lfc_thresh=1.0,
+    pval_thresh=2.0,
+    x_label="Log2 Fold Change",
+    y_label="-log10(p-value)",
+    title="Volcano Plot",
+    up_color="#d62728",      # red
+    down_color="#1f77b4",    # blue
+    ns_color="#bdbdbd",      # grey
+    width=1000,
+    height=750,
+    size_max=40,
+):
+    """
+    Create a customizable volcano plot with Plotly.
+
+    Parameters
+    ----------
+    table : pd.DataFrame
+        Input dataframe.
+    lfc_col : str
+        Column containing log fold changes.
+    pval_col : str
+        Column containing -log10(p-values).
+    gene_col : str or None
+        Column to use for hover labels. If None, uses index.
+    size_col : str or None
+        Column controlling point size.
+    lfc_thresh : float
+        Absolute log fold change threshold.
+    pval_thresh : float
+        -log10(p-value) threshold.
+    """
+
+    df = table.copy()
+
+    # Hover labels
+    if gene_col is None:
+        df["_gene_label"] = df.index.astype(str)
+        gene_col = "_gene_label"
+
+    # Classification
+    conditions = [
+        (df[lfc_col] >= lfc_thresh) & (df[pval_col] >= pval_thresh),
+        (df[lfc_col] <= -lfc_thresh) & (df[pval_col] >= pval_thresh),
+    ]
+
+    choices = ["Increasing", "Decreasing"]
+
+    df["_category"] = np.select(conditions, choices, default="NS")
+
+    color_map = {
+        "Increasing": up_color,
+        "Decreasing": down_color,
+        "NS": ns_color,
+    }
+
+    # Plot
+    fig = px.scatter(
+        df,
+        x=lfc_col,
+        y=pval_col,
+        color="_category",
+        color_discrete_map=color_map,
+        size=size_col,
+        hover_name=gene_col,
+        hover_data={
+            lfc_col: True,
+            pval_col: True,
+            size_col: True if size_col else False,
+            "_category": False,
+        },
+        width=width,
+        height=height,
+        size_max=size_max,
+    )
+
+    # Threshold lines
+    fig.add_vline(
+        x=lfc_thresh,
+        line_dash="dash",
+        line_color="black"
+    )
+
+    fig.add_vline(
+        x=-lfc_thresh,
+        line_dash="dash",
+        line_color="black"
+    )
+
+    fig.add_hline(
+        y=pval_thresh,
+        line_dash="dash",
+        line_color="black"
+    )
+
+    # White background
+    fig.update_layout(
+        template="simple_white",
+        title=title,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend_title_text="Category",
+    )
+
+    # Axis labels
+    fig.update_xaxes(title=x_label)
+    fig.update_yaxes(title=y_label)
+
+    return fig
