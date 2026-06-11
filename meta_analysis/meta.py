@@ -21,20 +21,25 @@ class MetaAnalysis:
         se = df["lfcSE"].values
         lfc = df["log2FoldChange"].values
 
-        # precision = 1 / se^2
-        precision = 1.0 / (se ** 2)  # shape: (n_studies,)
 
-        # Normalized Importances (across entire dataset).
-        importance_weights = balanced_matrix * df["baseMean"].values[:, None]
+        # Estimating Beta
+        custom = (df["baseMean"] * balanced_matrix.T)
+        variance_weighting = (1 / df["lfcSE"].pow(2))
 
-        # w = a / se^2
-        weights = precision[:, None] * importance_weights
+        weights = (custom * variance_weighting).pipe(lambda d: d.div(d.sum(axis=1), axis=0))
 
-        # naive estimate of mean and std error, as a gaussian mixture.
-        normalized_estimate = (weights * lfc[:, None]).sum() / weights.sum()
-        var = 1 / weights.sum(axis=0)
-        normalized_standard_error = np.sqrt(var)
+        normalized_estimate = (weights * df["log2FoldChange"]).sum(axis=1)
 
+        # Estimating sigma^2
+        custom_squared = (df["baseMean"] * balanced_matrix.T)
+        variance_weighting = (1 / df["lfcSE"].pow(2))
+
+        variance_weights = (custom * variance_weighting).pow(2)
+        variance_weights_normalized = (variance_weights).pipe(lambda d: d.div(d.sum(axis=1), axis=0))
+
+        normalized_standard_error = (variance_weights_normalized * df["lfcSE"]).sum(axis=1).apply(np.sqrt)
+
+        # Infer the Data Variance 
         tau2_samples, mean_samples = self.sample_tau2_likelihood(
             normalized_estimate, 
             normalized_standard_error.pow(2), 
@@ -74,8 +79,8 @@ class MetaAnalysis:
 
         table = pd.DataFrame({
             # Per Gene Statistics
-            "weights": weights.sum(),
-            "n_eff": (weights.sum().pow(2) / weights.pow(2).sum()),
+            "weights": (df["baseMean"] * balanced_matrix.T).sum(axis=1),
+            "n_eff": (weights.sum(axis=1).pow(2) / weights.pow(2).sum(axis=1)),
 
             # Naive Estimates
             "naive_estimate": normalized_estimate,
@@ -99,8 +104,6 @@ class MetaAnalysis:
 
             # Full Dataset Statistics
             "B": B,
-            "full_dataset_mean": full_dataset_mean,
-            "full_dataset_standard_error": tau2,
         })
 
         return table
